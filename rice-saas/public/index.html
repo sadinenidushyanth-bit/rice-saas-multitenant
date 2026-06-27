@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Rice Shop Manager — Multi-Shop</title>
+
+<!-- ═══════════════════════════════════════════════════════
+     FIREBASE INIT
+     ═══════════════════════════════════════════════════════ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import {
+    getFirestore, collection, addDoc, getDocs, updateDoc, deleteDoc, doc,
+    onSnapshot, query, orderBy, setDoc, getDoc, serverTimestamp, increment, where, limit
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import {
+    getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import {
+    getStorage, ref, uploadBytes, uploadString, getDownloadURL, deleteObject
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-functions.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCHR0efe8c5NrMQdPNS90Otrj6fPXTi4B0",
+    authDomain: "rice-shop-59c6a.firebaseapp.com",
+    projectId: "rice-shop-59c6a",
+    storageBucket: "rice-shop-59c6a.firebasestorage.app",
+    messagingSenderId: "632800299142",
+    appId: "1:632800299142:web:204f249cf28b48b1346907"
+  };
+
+  let app, db, auth, storage, functions;
+  try {
+    app       = initializeApp(firebaseConfig);
+    db        = getFirestore(app);
+    auth      = getAuth(app);
+    storage   = getStorage(app);
+    functions = getFunctions(app, "asia-south1");
+  } catch (e) {
+    console.error("Firebase initialization failed", e);
+  }
+
+  window._db        = db;
+  window._auth      = auth;
+  window._storage   = storage;
+  window._functions = functions;
+  window._fb = {
+    collection, addDoc, getDocs, updateDoc, deleteDoc, doc,
+    onSnapshot, query, orderBy, setDoc, getDoc, serverTimestamp, increment, where, limit,
+    ref, uploadBytes, uploadString, getDownloadURL, deleteObject,
+    signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword,
+    httpsCallable
+  };
+  window._fbReady = true;
+  document.dispatchEvent(new Event('firebase-ready'));
+</script>
+
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- ══ AUTH SCREEN ══ -->
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-box">
+    <div class="auth-logo">🌾</div>
+    <div class="auth-title">Rice Shop Manager</div>
+    <div class="auth-sub">Sign in to manage your shop</div>
+    <div id="auth-error" class="auth-error"></div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" id="auth-email" class="form-control" placeholder="your@email.com"
+        autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+        onkeydown="if(event.key==='Enter')document.getElementById('auth-pass').focus()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <div style="position:relative">
+        <input type="password" id="auth-pass" class="form-control" placeholder="••••••••"
+          autocomplete="current-password" style="padding-right:56px"
+          onkeydown="if(event.key==='Enter'||event.keyCode===13)doLogin()">
+        <button type="button" onclick="toggleAuthPass(this)"
+          style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;color:var(--text3);font-family:var(--font);padding:4px 6px;font-weight:600">
+          Show
+        </button>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()" disabled style="margin-top:4px">Connecting...</button>
+    <p style="font-size:11px;color:var(--text3);text-align:center;margin-top:14px;line-height:1.6;">
+      Use your <strong>email address</strong> and password to sign in.<br>
+      New shop? Contact the platform owner to get set up.
+    </p>
+  </div>
+</div>
+
+<!-- ══ SUBSCRIPTION LOCKED SCREEN ══ -->
+<div id="locked-screen" class="auth-screen hidden">
+  <div class="auth-box">
+    <div class="auth-logo">🔒</div>
+    <div class="auth-title">Subscription Required</div>
+    <div class="auth-sub" id="locked-message">Your shop's subscription has expired. Please renew to continue using Rice Shop Manager.</div>
+    <button class="btn btn-primary btn-full" onclick="openRenewModal()">💳 Renew Subscription</button>
+    <button class="btn btn-full" style="margin-top:8px" onclick="doLogout()">Sign out</button>
+  </div>
+</div>
+
+<!-- ══ MAIN APP ══ -->
+<div id="app" class="hidden">
+  <div class="header">
+    <div class="header-top">
+      <div class="shop-name" id="shop-name-display">🌾 <span>Rice</span> Shop</div>
+      <div class="header-right">
+        <span class="user-badge" id="user-badge">Admin</span>
+        <button class="logout-btn" onclick="doLogout()">Sign out</button>
+      </div>
+    </div>
+    <nav class="nav" id="main-nav">
+      <button class="nav-btn active" onclick="showTab('stock')" id="nav-stock" data-perm="stock">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2"/></svg>Stock
+      </button>
+      <button class="nav-btn" onclick="showTab('sales')" id="nav-sales" data-perm="sales">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Sales
+      </button>
+      <button class="nav-btn" onclick="showTab('record')" id="nav-record" data-perm="record">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Record Sale
+      </button>
+      <button class="nav-btn" onclick="showTab('orders')" id="nav-orders" data-perm="orders">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12H19M12 5l7 7-7 7"/></svg>Orders
+      </button>
+      <button class="nav-btn" onclick="showTab('whatsapp')" id="nav-whatsapp" data-perm="whatsapp">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>WhatsApp
+      </button>
+      <button class="nav-btn" onclick="showTab('customers')" id="nav-customers" data-perm="customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Customers
+      </button>
+      <button class="nav-btn" onclick="showTab('profit')" id="nav-profit" data-perm="profit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>Profit
+      </button>
+      <button class="nav-btn" onclick="showTab('permissions')" id="nav-permissions" data-perm="permissions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Permissions
+      </button>
+      <button class="nav-btn" onclick="showTab('billing')" id="nav-billing" data-perm="billing">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Billing
+      </button>
+      <button class="nav-btn" onclick="showTab('settings')" id="nav-settings" data-perm="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Settings
+      </button>
+      <button class="nav-btn" onclick="showTab('superadmin')" id="nav-superadmin">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 4.5v6c0 5-4 8.5-9 9.5-5-1-9-4.5-9-9.5v-6L12 2z"/></svg>Platform
+      </button>
+    </nav>
+  </div>
+
+  <div class="main">
+
+    <!-- ══ STOCK ══ -->
+    <div id="tab-stock">
+      <div id="metrics-bar" class="metrics"></div>
+      <div id="stock-alerts"></div>
+      <div class="section-head">
+        <span class="section-title">Rice bags</span>
+        <input type="text" id="stock-search" class="form-control" style="max-width:140px;min-width:90px;flex:1 1 90px" placeholder="Search..." oninput="renderStock()">
+        <button class="btn" style="background:var(--purple);color:#fff;border-color:var(--purple);font-size:13px" id="btn-sell-loose-quick" onclick="openLooseSaleModal(null)">⚖️ Sell loose</button>
+        <button class="btn btn-primary" id="btn-add-bag" onclick="openBagModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add bag
+        </button>
+      </div>
+      <div id="bag-grid" class="bag-grid"></div>
+    </div>
+
+    <!-- ══ SALES ══ -->
+    <div id="tab-sales" class="hidden">
+      <div id="sales-metrics" class="metrics"></div>
+      <div class="card">
+        <div class="card-title">Transaction history</div>
+        <input type="text" id="sales-search" class="form-control" style="margin-bottom:12px" placeholder="Search by Order ID, Name or Product..." oninput="renderSales()">
+        <div class="filter-row">
+          <button class="filter-btn active" onclick="setSalesFilter('all',this)">All</button>
+          <button class="filter-btn" onclick="setSalesFilter('today',this)">Today</button>
+          <button class="filter-btn" onclick="setSalesFilter('week',this)">This week</button>
+          <button class="filter-btn" onclick="setSalesFilter('month',this)">This month</button>
+          <div style="display:flex;gap:4px;align-items:center;margin-left:auto;flex-wrap:wrap;max-width:100%">
+            <input type="date" id="sales-start-date" class="form-control" style="width:115px;max-width:45vw;padding:5px;font-size:12px" onchange="customSalesFilter()">
+            <span style="font-size:11px;color:var(--text3)">to</span>
+            <input type="date" id="sales-end-date" class="form-control" style="width:115px;max-width:45vw;padding:5px;font-size:12px" onchange="customSalesFilter()">
+          </div>
+        </div>
+        <div id="sales-list"></div>
+      </div>
+    </div>
+
+    <!-- ══ RECORD SALE ══ -->
+    <div id="tab-record" class="hidden">
+      <div class="card">
+        <div class="card-title">Record a sale</div>
+        <div class="form-group">
+          <label class="form-label">Rice bag</label>
+          <select id="rs-bag" class="form-control" onchange="onBagSelect()"></select>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Quantity (bags)</label><input type="number" id="rs-qty" class="form-control" value="1" min="1" oninput="updateSalePreview()"></div>
+          <div class="form-group"><label class="form-label">Vendor cost / bag (₹)</label><input type="number" id="rs-cost" class="form-control" oninput="updateSalePreview()"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Selling price / bag (₹)</label><input type="number" id="rs-price" class="form-control" oninput="updateSalePreview()"></div>
+          <div class="form-group"><label class="form-label">Sale type</label>
+            <select id="rs-type" class="form-control" onchange="toggleInvoiceFields()">
+              <option value="walkin">🏪 Walk-in</option>
+              <option value="whatsapp">💬 WhatsApp order</option>
+              <option value="delivery">🛵 Home delivery</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Customer name</label><input type="text" id="rs-cust" class="form-control" placeholder="e.g. Ravi Kumar"></div>
+          <div class="form-group"><label class="form-label">Phone (WhatsApp)</label><input type="tel" id="rs-phone" class="form-control" placeholder="919876543210"></div>
+        </div>
+        <div id="invoice-fields" style="display:none">
+          <div id="invoice-wa-notice" class="alert green" style="display:none">💬 This will be saved as a WhatsApp order. An invoice can be sent after recording.</div>
+          <div id="invoice-del-notice" class="alert green" style="display:none">🛵 This will be saved as a home delivery. An invoice can be sent after recording.</div>
+          <div class="form-group"><label class="form-label">Delivery address</label><textarea id="rs-address" class="form-control" placeholder="Door no, street, area..."></textarea></div>
+          <div class="form-group"><label class="form-label">Location link (optional)</label><input type="text" id="rs-location" class="form-control" placeholder="Paste Google Maps link..."></div>
+        </div>
+        <div id="sale-preview" style="display:none;background:var(--green-light);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:var(--green);margin-bottom:12px"></div>
+        <button class="btn btn-primary btn-full" onclick="recordSale()">✅ Record sale</button>
+      </div>
+    </div>
+
+    <!-- ══ ORDERS ══ -->
+    <div id="tab-orders" class="hidden">
+      <div id="orders-metrics" class="metrics"></div>
+      <div class="section-head">
+        <span class="section-title">Delivery orders</span>
+        <input type="text" id="orders-search" class="form-control" style="max-width:160px" placeholder="Search..." oninput="renderOrders()">
+        <button class="btn btn-primary" onclick="openOrderModal()">+ New order</button>
+      </div>
+      <div class="filter-row">
+        <button class="filter-btn active" onclick="setOrderFilter('all',this)">All</button>
+        <button class="filter-btn" onclick="setOrderFilter('Pending',this)">Pending</button>
+        <button class="filter-btn" onclick="setOrderFilter('Confirmed',this)">Confirmed</button>
+        <button class="filter-btn" onclick="setOrderFilter('Delivering',this)">Out for delivery</button>
+        <button class="filter-btn" onclick="setOrderFilter('Delivered',this)">Delivered</button>
+      </div>
+      <div class="card"><div id="orders-list"></div></div>
+    </div>
+
+    <!-- ══ WHATSAPP ══ -->
+    <div id="tab-whatsapp" class="hidden">
+      <div class="morning-card" id="morning-card">
+        <div class="morning-title">☀️ Morning Stock Message</div>
+        <div class="morning-sub" id="morning-date"></div>
+        <div class="morning-offer" id="morning-offer">Generating smart offer...</div>
+        <div class="morning-actions">
+          <button class="btn" onclick="regenerateOffer()">🔄 Refresh offer</button>
+          <button class="btn btn-wa" onclick="openSendModal('morning')">Send to selected customers</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Custom message</div>
+        <div class="wa-wrap"><div class="wa-bubble" id="wa-msg"></div><div class="wa-time" id="wa-time"></div></div>
+        <div class="wa-actions">
+          <button class="btn btn-wa" onclick="openSendModal('broadcast')">Send to selected</button>
+          <button class="btn" onclick="copyMsg()">Copy message</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Customer order link</div>
+        <p style="font-size:13px;color:var(--text3);margin-bottom:12px">Share this — customer taps it and WhatsApp opens with a pre-filled order message to you.</p>
+        <div class="wa-wrap"><div class="wa-bubble" id="wa-order-msg"></div><div class="wa-time">Customer sends this to you ↑</div></div>
+        <div class="wa-actions">
+          <button class="btn btn-wa" onclick="shareOrderLink()">Share order link</button>
+          <button class="btn" onclick="copyOrderLink()">Copy link</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ CUSTOMERS ══ -->
+    <div id="tab-customers" class="hidden">
+      <div id="customers-metrics" class="metrics"></div>
+      <div class="section-head">
+        <span class="section-title">Customer list</span>
+        <button class="btn btn-primary" onclick="openCustomerModal()">+ Add customer</button>
+      </div>
+      <div class="card"><div id="customers-list"></div></div>
+    </div>
+
+    <!-- ══ PROFIT ══ -->
+    <div id="tab-profit" class="hidden">
+      <div id="profit-metrics" class="metrics"></div>
+      <div class="card">
+        <div class="card-title">📊 Profit vs Vendor Cost</div>
+        <div class="filter-row">
+          <button class="filter-btn active" onclick="setProfitFilter('month',this)">This month</button>
+          <button class="filter-btn" onclick="setProfitFilter('week',this)">This week</button>
+          <button class="filter-btn" onclick="setProfitFilter('today',this)">Today</button>
+          <button class="filter-btn" onclick="setProfitFilter('all',this)">All time</button>
+          <div style="display:flex;gap:4px;align-items:center;margin-left:auto;flex-wrap:wrap">
+            <input type="date" id="profit-start-date" class="form-control" style="width:115px;max-width:45vw;padding:5px;font-size:12px" onchange="customProfitFilter()">
+            <span style="font-size:11px;color:var(--text3)">to</span>
+            <input type="date" id="profit-end-date" class="form-control" style="width:115px;max-width:45vw;padding:5px;font-size:12px" onchange="customProfitFilter()">
+          </div>
+        </div>
+        <div id="profit-per-product"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">📋 Sales with profit detail</div>
+        <div id="profit-sales-list"></div>
+      </div>
+    </div>
+
+    <!-- ══ PERMISSIONS ══ -->
+    <div id="tab-permissions" class="hidden">
+      <div class="section-head">
+        <span class="section-title">User accounts & permissions</span>
+        <button class="btn btn-primary" onclick="openNewUserModal()">+ Create worker account</button>
+      </div>
+      <div id="permissions-list"></div>
+    </div>
+
+    <!-- ══ BILLING ══ -->
+    <div id="tab-billing" class="hidden">
+      <div class="card">
+        <div class="card-title">💳 Subscription</div>
+        <div id="billing-status-box"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Payment history</div>
+        <div id="billing-history"></div>
+      </div>
+    </div>
+
+    <!-- ══ SETTINGS ══ -->
+    <div id="tab-settings" class="hidden">
+      <div class="card">
+        <div class="card-title">Shop settings</div>
+        <div class="form-group"><label class="form-label">Shop name</label><input type="text" id="set-shopname" class="form-control" placeholder="e.g. Sri Sai Rice Shop"></div>
+        <div class="form-group"><label class="form-label">Your WhatsApp number (with country code)</label><input type="text" id="set-wanum" class="form-control" placeholder="919876543210"></div>
+        <div class="form-group"><label class="form-label">City / Area</label><input type="text" id="set-city" class="form-control" placeholder="e.g. Tuni, Andhra Pradesh"></div>
+        <div class="form-group"><label class="form-label">Delivery charge (₹)</label><input type="number" id="set-delivery" class="form-control" placeholder="30"></div>
+        <button class="btn btn-primary btn-full" onclick="saveSettings()">Save settings</button>
+      </div>
+    </div>
+
+    <!-- ══ SUPER ADMIN (platform owner only) ══ -->
+    <div id="tab-superadmin" class="hidden">
+      <div class="card">
+        <div class="card-title">🏪 All Shops</div>
+        <button class="btn btn-primary" style="margin-bottom:14px" onclick="openCreateShopModal()">+ Create new shop</button>
+        <div id="superadmin-shops-list"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- All modals are injected by modals.html via JS include, kept inline here for simplicity -->
+<div id="modals-container"></div>
+
+<div id="toast" class="toast"></div>
+<div id="print-area"></div>
+
+<script src="js/state.js"></script>
+<script src="js/tenant.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/firebase.js"></script>
+<script src="js/tabs.js"></script>
+<script src="js/stock.js"></script>
+<script src="js/sales.js"></script>
+<script src="js/orders.js"></script>
+<script src="js/whatsapp.js"></script>
+<script src="js/customers.js"></script>
+<script src="js/profit.js"></script>
+<script src="js/permissions.js"></script>
+<script src="js/billing.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/superadmin.js"></script>
+<script src="js/invoice.js"></script>
+<script src="js/loosesale.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/modals.js"></script>
+</body>
+</html>

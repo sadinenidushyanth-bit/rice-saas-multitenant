@@ -1,0 +1,123 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════
+// Firestore Security Rules — Multi-tenant isolation
+//
+// Core guarantee: a signed-in user can only read/write
+// documents under shops/{shopId}/... if their own uid
+// appears in shops/{shopId}/users/{uid}. There is no other
+// way in. This is what makes "Shop A can never see Shop B's
+// data" true even if there's a bug in the app's JavaScript —
+// the rules are the actual enforcement, not the UI.
+// ═══════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Is this uid a member of this shop? ──
+    function isShopMember(shopId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/shops/$(shopId)/users/$(request.auth.uid));
+    }
+
+    function isShopOwner(shopId) {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/shops/$(shopId)/users/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    function hasShopPerm(shopId, perm) {
+      let userDoc = get(/databases/$(database)/documents/shops/$(shopId)/users/$(request.auth.uid)).data;
+      return userDoc.role == 'owner' || userDoc.permissions[perm] == true;
+    }
+
+    // ── userShopMap/{uid} — a user may only read their OWN mapping.
+    //    Only Cloud Functions (Admin SDK, bypasses rules) may write it. ──
+    match /userShopMap/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false; // server-only, via Cloud Functions
+    }
+
+    // ── Is this the platform super admin? Checked via custom claim,
+    //    set once on your own account (see note at bottom of this file
+    //    for how to set it). Falling back to false if the claim is
+    //    absent keeps this safe by default. ──
+    function isPlatformSuperAdmin() {
+      return request.auth != null && request.auth.token.superAdmin == true;
+    }
+
+    // ── shops/{shopId} — the shop's own info doc ──
+    match /shops/{shopId} {
+      allow read: if isShopMember(shopId) || isPlatformSuperAdmin();
+      // Only the owner can edit shop info (name, city, WhatsApp number, etc.)
+      // Subscription fields (subscriptionStatus, subscriptionExpiresAt) are
+      // only ever written by the razorpayWebhook or setShopSubscription
+      // Cloud Functions (Admin SDK, bypasses these rules entirely) —
+      // never by a normal owner/worker write, and never directly by the
+      // super admin's own client SDK either (their override buttons call
+      // the Cloud Function too — see superadmin.js).
+      allow update: if isShopOwner(shopId) &&
+        !('subscriptionStatus' in request.resource.data.diff(resource.data).affectedKeys()) &&
+        !('subscriptionExpiresAt' in request.resource.data.diff(resource.data).affectedKeys());
+      allow create, delete: if false; // shop creation/deletion is server-only
+    }
+
+    // ── Allow the super admin to list the whole shops collection
+    //    (needed for the Platform tab's getDocs(collection('shops'))). ──
+    match /shops/{shopId=**} {
+      allow list: if isPlatformSuperAdmin();
+    }
+
+    // ── shops/{shopId}/users/{uid} — permissions list ──
+    match /shops/{shopId}/users/{uid} {
+      allow read: if isShopMember(shopId);
+      // Only the owner (or someone with the 'permissions' perm) may toggle
+      // another user's permissions. Nobody may edit their own role.
+      allow update: if isShopMember(shopId) &&
+        hasShopPerm(shopId, 'permissions') &&
+        request.resource.data.role == resource.data.role; // role itself is immutable from the client
+      allow create, delete: if false; // user creation/removal is server-only (Cloud Functions)
+    }
+
+    // ── shops/{shopId}/payments/{id} — billing history, read-only from client ──
+    match /shops/{shopId}/payments/{paymentId} {
+      allow read: if isShopMember(shopId) && isShopOwner(shopId);
+      allow write: if false; // only the razorpayWebhook Cloud Function writes these
+    }
+
+    // ── shops/{shopId}/bags|sales|orders|customers|openedBags/{id} ──
+    // Generic per-collection rule: any shop member can read; specific
+    // permission flags gate writes, matching hasPerm() checks in the app.
+    match /shops/{shopId}/bags/{bagId} {
+      allow read: if isShopMember(shopId);
+      allow create, update: if isShopMember(shopId) && hasShopPerm(shopId, 'addEditBag');
+      allow delete: if isShopMember(shopId) && hasShopPerm(shopId, 'deleteBag');
+    }
+
+    match /shops/{shopId}/sales/{saleId} {
+      allow read: if isShopMember(shopId);
+      allow create: if isShopMember(shopId) && hasShopPerm(shopId, 'record');
+      allow update, delete: if isShopMember(shopId) && isShopOwner(shopId);
+    }
+
+    match /shops/{shopId}/orders/{orderId} {
+      allow read: if isShopMember(shopId);
+      allow create: if isShopMember(shopId) && hasShopPerm(shopId, 'addOrder');
+      allow update: if isShopMember(shopId) && hasShopPerm(shopId, 'updateOrder');
+      allow delete: if isShopMember(shopId) && isShopOwner(shopId);
+    }
+
+    match /shops/{shopId}/customers/{custId} {
+      allow read: if isShopMember(shopId);
+      allow create, update: if isShopMember(shopId) && hasShopPerm(shopId, 'addCustomer');
+      allow delete: if isShopMember(shopId) && isShopOwner(shopId);
+    }
+
+    match /shops/{shopId}/openedBags/{openId} {
+      allow read: if isShopMember(shopId);
+      allow create, update, delete: if isShopMember(shopId) && hasShopPerm(shopId, 'record');
+    }
+
+    // Deny everything else by default (implicit — Firestore rules are
+    // deny-by-default for any path not matched above).
+  }
+}
